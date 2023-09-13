@@ -321,7 +321,7 @@ sources:
         template: |
           # Master Sheet
 
-      - type: vql # TODO: DO WE KEEP THIS AS A VQL CELL OR A VQL SUGGESTION? IF SUGGESTION THEN THE END USER NEEDS TO ADD IT MANUALLY BUT WOULDNT NEED TO REFRESH
+      - type: vql
         name: Master Workbook
         template: |
           SELECT *
