@@ -1,0 +1,85 @@
+name: Custom.Elastic.LateralMovement.Visualization.Flows.Upload
+
+author: Kostya Ilioukevitch and Phalgun Kulkarni
+
+description: |
+
+  The artifact monitors the **`Custom.Windows.LateralMovement`** plugin, formats, and uploads the results to ElasticSearch for ***visualization***.
+
+  The uploaded results can be imported into ***Grafana*** for visualization. Results are formatted to accommodate Grafana’s Node-Edge graph data requirements.
+
+    - https://grafana.com/docs/grafana/latest/panels-visualizations/visualizations/node-graph/
+
+  The index name is appended with `_visualization` for differentiating the index from the unformatted Custom.Windows.LateralMovement results.
+
+  Artifact used as inspiration:
+
+    - Elastic.Flows.Upload
+
+  © 2021 Aon plc
+
+type: SERVER_EVENT
+
+parameters:
+  - name: elasticAddresses
+    default: http://127.0.0.1:9200/
+  - name: Username
+  - name: Password
+  - name: APIKey
+  - name: DisableSSLSecurity
+    type: bool
+    description: Disable SSL certificate verification
+  - name: Threads
+    type: int
+    description: Number of threads to upload with
+  - name: ChunkSize
+    type: int
+    description: Batch this many rows for each upload.
+  - name: CloudID
+    description: The cloud id if needed
+  - name: RootCA
+    description: |
+      A root CA certificate in PEM for trusting TLS protected Elastic
+      servers.
+
+sources:
+  - query: |
+      LET completions = SELECT * FROM watch_monitoring(
+             artifact="System.Flow.Completion")
+             WHERE Flow.artifacts_with_results =~ "Custom.Windows.LateralMovement"
+
+      LET documents = SELECT * FROM foreach(row=completions,
+          query={
+             SELECT * FROM foreach(
+                 row=Flow.artifacts_with_results,
+                 query={
+                     SELECT EventTime AS id,
+                            SourceSystem AS source,
+                            DestinationSystem AS target,
+                            UserAccount AS detail__UserAccount,
+                            SourceIpAddress AS detail__SourceIpAddress,
+                            DestinationIpAddress AS detail__DestinationIpAddress,
+                            Description AS detail__Description,
+                            "artifact_" + regex_replace(source=_value,
+                               re='[/.]', replace='_') + "_visualization" AS _index
+
+                      FROM source(
+                        client_id=ClientId,
+                        flow_id=Flow.session_id,
+                        artifact=_value)
+                 })
+          })
+
+      SELECT * FROM elastic_upload(
+            query=documents,
+            threads=Threads,
+            chunk_size=ChunkSize,
+            addresses=split(string=elasticAddresses, sep=","),
+            index="velociraptor",
+            password=Password,
+            username=Username,
+            cloud_id=CloudID,
+            api_key=APIKey,
+            root_ca=RootCA,
+            disable_ssl_security=DisableSSLSecurity,
+            type="artifact")

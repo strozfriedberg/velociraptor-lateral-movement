@@ -1,0 +1,1232 @@
+name: Custom.Windows.LateralMovement
+description: |
+   This artifact combines a plethora of lateral movement artifacts and provides normalized results.
+   It also enhances investigations by saving the time used to find artifacts and filter useful information from multiple output formats.
+
+   The following lateral movement sources are included within the artifact:
+
+   - Security Event Logs
+    - `4624` = Account_Logged_On
+    - `4648` = Logon_Attempt_Explicit_Credentials
+    - `4663` = Object_Access_Attempt
+    - `4672` = Privileged_Logon
+    - `4776` = Credential_Validation_Attempted
+    - `4778` = Session_Reconnected
+    - `5140` = Share_Access
+    - `5145` = Share_Access
+   - User Access Logs
+    - Timestamp is **LAST ACCESS TIME** and the insert date is found in `additional information` column
+    - Regex used for access types is '''^File|^Remote|^Web|^FTP'''
+   - RDP Event Logs
+    - RdpCoreTS
+        - `131` = RDP_Connection_Established
+    - LocalSessionManager
+        - `21` = Successful_RDP_Logon
+    - RemoteConnectionManager
+        - `1149` = RDP_User_Authentication_Succeeded
+    - RDPClient
+        - `1024` = Initiated_RDP_Connection_to_Destination
+        - `1102` = Initiated_RDP_Connection_to_Destination
+   - ShellBags ***(THIS IS SLOW AS IT USES A BINARY PARSER)***
+      - Network Locations accessed via Windows explorer
+   - WinRMOperational event Log
+         - `6` = Initiated_Remote_Session_via_WinRM
+      - `91` = Recevied_Remote_Connection_via_WinRM
+   - SMB Event Logs
+      - `3000` = Remote_Access_via_SMB
+      - `30806` = Session_Re-Established_to_Destination_via_SMB
+   - WinSCP
+      - Extracts data from various registry keys leveraged by WinSCP
+   - OpenSSH
+      - OpenSSH Operational event log entries related to authentication
+   - LNK
+      - Windows shortcut files pointing to network locations
+   - TeamViewer
+      - Leverages TeamViewer artifact to extract incoming connections from C:\Program Files and (x86)\TeamViewer\Connections_incoming.txt file
+   - Putty SSH HostKeys
+      - Extracts data associated with ssh hostkeys
+   - ScreenConnect
+      - Extracts connection events for ScreenConnect from the Application event log
+   - Registry Mount Points
+      - Enumerates mount points from the NTUser.dat hive
+   - Map Network Drive MRU
+      - MRU for mapping network drives from the NTUser.dat hive
+   - Terminal Server Registry
+      - Extracts RDP connections from the NTUser.dat hive
+   - RunMRU
+      - Extracts entries of network locations accessed via Run box/RunMRU
+   - Typed Paths
+      - Extracts network locations accessed via Windows Explorer from the NTUser.dat hive
+   - Mapped Network Shares
+      - Extracts mapped network shares from the NTUser.dat hive
+   - PsExec
+      - Enumerates PsExeSvc `7045` service install events from System log
+   - Atera
+      - Extracts evidence of Atera incoming connections from the Software registry hive
+   - AnyDesk
+      - Leverages the exchange AnyDesk artifact to parse the AnyDesk log files on destination system
+
+   Artifacts used as inspiration or wrapper:
+
+   - Windows.EventLogs.CondensedAccountUsage [Thomas DIOT (Qazeer)]
+   - Windows.EventLogs.RDPAuth [Matt Green - @mgreen27]
+   - Windows.Registry.PuttyHostKeys [Matt Green - @mgreen27]
+   - Windows.EventLogs.EvtxHunter
+   - Windows.Forensics.UserAccessLogs
+   - Windows.Forensics.Shellbags
+   - Windows.Registry.NTUser
+   - Windows.Applications.TeamViewer.Incoming [Matt Green - @mgreen27]
+   - Windows.Timeline.Registry.RunMRU [Matt Green - @mgreen27]
+   - Exchange.Windows.Applications.AnyDesk [Jos Clephas - @DfirJos]
+
+   © 2021 Aon plc
+
+type: CLIENT
+
+parameters:
+  - name: Evtx_Path
+    default: '%SystemRoot%\System32\Winevt\Logs\'
+  - name: RemoveSystemAccounts
+    description: |
+      Removes all entries where UserAccount matches to SYSTEM, LOCAL SERVICE, NETWORK SERVICE, or %ComputerName%$.
+      In addition, also removes all entries where domain starts with Font Driver Host, or Window Manager.
+    type: bool
+    default: Y
+  - name: RemoveAnonymousLogon
+    description: |
+      Removes all entries where UserAccount matches to NT AUTHORITY\ANONYMOUS LOGON
+    type: bool
+    default: Y
+  - name: UserAccountRegex
+    description: Regex to only include all events tied to these users
+    type: regex
+    default: .
+  - name: DateAfter
+    type: timestamp
+    description: Search for events after this date. YYYY-MM-DDTmm:hh:ssZ
+  - name: DateBefore
+    type: timestamp
+    description: Search for events before this date. YYYY-MM-DDTmm:hh:ssZ
+  - name: SUMGlob
+    type: glob
+    default: C:/Windows/System32/LogFiles/Sum/*
+    description: Used in User Access Logs Source. A glob to find all SUM ESE databases on the system.
+  - name: 4672_PrivilegedLogon
+    type: bool
+    default: Y
+    description: If checked, includes the 4672 (Privileged Logon) event from the Security event log.
+  - name: 5140_ShareAccess
+    type: bool
+    default: Y
+    description: If checked, includes the 5140 (Share access) event from the Security event log.
+  - name: 5145_ShareAccess
+    type: bool
+    default: Y
+    description: If checked, includes the 5145 (Share access) event from the Security event log.
+  - name: 4776_CredValidationAttempt
+    type: bool
+    default: Y
+    description: If checked, includes the 4776 (Credential Validation Attempt) event from the Security event log.
+  - name: 4778_SessionReconnect
+    type: bool
+    default: Y
+    description: If checked, includes the 4778 (Session Reconnection) event from the Security event log.
+  - name: 131_RDP_Connection_Established
+    type: bool
+    default: Y
+    description: If checked, includes the 131 (RDP Connection Established) event from the Microsoft-Windows-RemoteDesktopServices-RdpCoreTS%4Operational event log.
+  - name: 91_Remote_Connection_Received_WinRM
+    type: bool
+    default: Y
+    description: If checked, includes the 91 (Remote Connection received from Source System via WinRM) event from the Microsoft-Windows-WinRM%4Operational event log.
+  - name: 3000_Access_via_SMB
+    type: bool
+    default: Y
+    description: If checked, includes the 3000 (Remote Access via SMB) event from the Microsoft-Windows-SMBServer%4Audit event log.
+  - name: 30806_Session_Re-Established_to_Dest
+    type: bool
+    default: Y
+    description: If checked, includes the 30806 (Session Re-Established to Destination via SMB) event from the Microsoft-Windows-SmbClient%4Connectivity event log.
+  - name: EnableShellBags
+    type: bool
+    default: N
+    description: |
+      Used in ShellBags Source. By default, the ShellBags source is disabled due to a large performance impact on the end client.
+      Please be aware that enabling this will likely cause the artifact to run longer than the standard default timeout.
+  - name: SearchSpecs
+    type: csv
+    description: Used in ShellBags Source. Define locations of MRU bags in various registries.
+    default: |
+      HiveGlob,KeyGlob
+      C:/Users/*/NTUSER.dat,\Software\Microsoft\Windows\Shell\BagMRU\**
+      C:/Users/*/AppData/Local/Microsoft/Windows/UsrClass.dat,\Local Settings\Software\Microsoft\Windows\Shell\BagMRU\**
+
+precondition: SELECT OS From info() where OS = 'windows'
+
+sources:
+  - name: Security EVTX
+    description: Parses the Security.evtx log for the following event IDs (4624, 4648, 4663, 4672, 4776, 4778, 5140, 5145).
+    query: |
+      LET EIDLookup <= dict(
+        `4624` = 'ACCOUNT_LOGGED_ON',
+        `4648` = 'LOGON_ATTEMPT_EXPLICIT_CREDENTIALS',
+        `4672` = 'PRIVILEGED_LOGON',
+        `4776` = 'CREDENTIAL_VALIDATION_ATTEMPTED',
+        `4778` = 'SESSION_RECONNECTED',
+        `5140` = 'SHARE_ACCESS',
+        `5145` = 'SHARE_ACCESS')
+
+      LET DomainNameLookup <= dict(
+        `4624` = 'TargetDomainName',
+        `4648` = 'TargetDomainName',
+        `4672` = 'SubjectDomainName',
+        `4776` = '',
+        `4778` = 'AccountDomain',
+        `5140` = 'SubjectDomainName',
+        `5145` = 'SubjectDomainName')
+
+      LET UserNameLookup <= dict(
+        `4624` = 'TargetUserName',
+        `4648` = 'TargetUserName',
+        `4672` = 'SubjectUserName',
+        `4776` = 'TargetUserName',
+        `4778` = 'AccountName',
+        `5140` = 'SubjectUserName',
+        `5145` = 'SubjectUserName')
+
+      LET InteractiveLogon <= dict(
+        `0` = "No",
+        `2` = "Yes",
+        `3` = "Both",
+        `4` = "No",
+        `5` = "No",
+        `7` = "Yes",
+        `8` = "Yes",
+        `9` = "Yes",
+        `10` = "Yes",
+        `11` = "Yes",
+        `12` = "Yes",
+        `13` = "Yes"
+      )
+
+      Let getAddInfoDict(EventID, EventData) = if(condition = EventID = 4624, -- 4624 ADDINFO DICT
+                                                  then= dict(`EventID` = EventID,
+                                                             `LogonType`= EventData.LogonType,
+                                                             `LogonProcessName` = EventData.LogonProcessName,
+                                                             `Interactive` = get(item=InteractiveLogon, member=EventData.LogonType),
+                                                             `ConfidenceLevel`= "Strong"),
+
+                                                  else= if(condition= EventID = 4648, -- 4648 ADDINFO DICT
+                                                  then= dict(`EventID` = EventID,
+                                                             `SubjectUser` = join(array=[EventData.SubjectDomainName, EventData.SubjectUserName], sep="\\"),
+                                                             `ProcessName` = EventData.ProcessName,
+                                                             `Interactive` = "Both",
+                                                             `ConfidenceLevel` = "Medium"),
+
+                                                  else= if(condition= EventID = 4672, -- 4672 ADDINFO DICT
+                                                  then= dict(`EventID` = EventID,
+                                                             `PrivilegeList` = EventData.PrivilegeList,
+                                                             `Interactive` = "Both",
+                                                             `ConfidenceLevel` = "Strong"),
+
+                                                  else= if(condition= EventID = 4778, -- 4778 ADDINFO DICT
+                                                  then= dict(`EventID` = EventID,
+                                                             `Interactive` = "Yes",
+                                                             `ConfidenceLevel` = "Strong"),
+
+                                                  else= if(condition= EventID = 5140, -- 5140 ADDINFO DICT
+                                                  then= dict(`EventID` = EventID,
+                                                             `ObjectType` = EventData.ObjectType,
+                                                             `ShareName` = EventData.ShareName,
+                                                             `ShareLocalPath` = EventData.ShareLocalPath,
+                                                             `AccessMask` = EventData.AccessMask,
+                                                             `AccessList` = EventData.AccessList,
+                                                             `Interactive` = "Yes",
+                                                             `ConfidenceLevel` = "Strong"),
+
+                                                  else= if(condition= EventID = 5145, -- 5145 ADDINFO DICT
+                                                  then= dict(`EventID` = EventID,
+                                                             `ObjectType` = EventData.ObjectType,
+                                                             `ShareName` = EventData.ShareName,
+                                                             `ShareLocalPath` = EventData.ShareLocalPath,
+                                                             `AccessMask` = EventData.AccessMask,
+                                                             `AccessList` = EventData.AccessList,
+                                                             `RelativeTargetName` = EventData.RelativeTargetName,
+                                                             `Interactive` = "Yes",
+                                                             `ConfidenceLevel` = "Medium"),
+
+                                                  else= if(condition= EventID = 4776, -- 4776 ADDINFO DICT
+                                                  then= dict(`EventID` = EventID,
+                                                             `Status` = EventData.Status,
+                                                             `Interactive` = "Both",
+                                                             `ConfidenceLevel` = "Strong"))))))))
+
+      LET DateAfterTime <= if(condition=DateAfter,
+        then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+      LET DateBeforeTime <= if(condition=DateBefore,
+        then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+      SELECT timestamp(epoch=int(int=System.TimeCreated.SystemTime)) AS EventTime,
+             get(item=EIDLookup, member=System.EventID.Value) AS Description,
+             System.Channel AS ArtifactSource,
+             if(condition= EventData.WorkstationName,
+                then= EventData.WorkstationName,
+                else= if(condition= EventData.ClientName,
+                          then= EventData.ClientName,
+                          else= if(condition= EventData.Workstation,
+                                   then= EventData.Workstation,
+                                   else= if(condition= System.EventID.Value = 4648,
+                                            then= System.Computer,
+                                            else='-')))) as SourceSystem,
+             if(condition= System.EventID.Value in (4648, 5145),
+                then= '-',
+                else= if(condition = EventData.IpAddress,
+                then= EventData.IpAddress,
+                else= if(condition= EventData.ClientAddress,
+                          then= EventData.ClientAddress,
+                          else= '-'))) as SourceIpAddress,
+             if(condition= EventData.TargetServerName,
+                then= if(condition= EventData.TargetServerName = "localhost",
+                         then= System.Computer,
+                         else= EventData.TargetServerName),
+                else= System.Computer) as DestinationSystem,
+             if(condition= System.EventID.Value = 4648,
+                then= EventData.IpAddress,
+                else= "-") AS DestinationIpAddress,
+             join(array=[get(item=EventData, member=get(item=DomainNameLookup, member=str(str=System.EventID.Value))),
+                        get(item=EventData, member=get(item=UserNameLookup, member=str(str=System.EventID.Value)))],
+                  sep = "\\") AS UserAccount,
+             if(condition= System.EventID.Value= 4648,
+                then= "Outbound",
+                else= "Inbound") AS Direction,
+             getAddInfoDict(EventID= System.EventID.Value, EventData= EventData) AS AddInfo
+      FROM parse_evtx(filename=join(array=[expand(path=Evtx_Path),"Security.evtx"]))
+      WHERE (System.EventID.Value in (4624, 4648)
+             OR (`4672_PrivilegedLogon` AND System.EventID.Value = 4672)
+             OR (`5140_ShareAccess` AND System.EventID.Value = 5140)
+             OR (`5145_ShareAccess` AND System.EventID.Value = 5145)
+             OR (`4776_CredValidationAttempt` AND System.EventID.Value = 4776)
+             OR (`4778_SessionReconnect` AND System.EventID.Value = 4778))
+        AND NOT (RemoveSystemAccounts
+                 AND (UserAccount =~ '''^(NT AUTHORITY|Font Driver Host|Window Manager)\\(SYSTEM|LOCAL SERVICE|NETWORK SERVICE|UMFD-[0-9]|DWM-[0-9])$'''
+                      OR UserAccount =~ expand(path='%ComputerName%$')))
+        AND NOT (RemoveAnonymousLogon
+                 AND UserAccount =~ '''NT AUTHORITY\\ANONYMOUS LOGON''')
+        AND UserAccount =~ UserAccountRegex
+        AND EventTime > DateAfterTime
+        AND EventTime < DateBeforeTime
+
+    notebook:
+      - type: md
+        template: |
+          # Master Sheet
+
+      - type: vql # TODO: DO WE KEEP THIS AS A VQL CELL OR A VQL SUGGESTION? IF SUGGESTION THEN THE END USER NEEDS TO ADD IT MANUALLY BUT WOULDNT NEED TO REFRESH
+        name: Master Workbook
+        template: |
+          SELECT *
+          FROM chain(a={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/Security EVTX")
+            LIMIT 50
+          }, b={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/User Access Logs")
+            LIMIT 50
+          }, c={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/Remote Desktop Protocol EVTX")
+            LIMIT 50
+          }, d={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/ShellBags")
+            LIMIT 50
+          }, e={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/WinRMOperational EVTX")
+            LIMIT 50
+          }, f={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/WinSCP")
+            LIMIT 50
+          }, g={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/OpenSSH")
+            LIMIT 50
+          }, h={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/LNK")
+            LIMIT 50
+          }, i={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/TeamViewer")
+            LIMIT 50
+          }, j={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/Putty SSH HostKeys")
+            LIMIT 50
+          }, k={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/ScreenConnect")
+            LIMIT 50
+          }, l={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/Registry Mount Points")
+            LIMIT 50
+          }, m={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/Map Network Drive MRU")
+            LIMIT 50
+          }, n={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/Terminal Server Registry")
+            LIMIT 50
+          }, o={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/RunMRU")
+            LIMIT 50
+          }, p={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/Typed Paths")
+            LIMIT 50
+          }, q={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/Mapped Network Shares")
+            LIMIT 50
+          }, r={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/SMB Server Audit EVTX")
+            LIMIT 50
+          }, s={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/PsExec")
+            LIMIT 50
+          }, t={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/Atera Network Connections")
+            LIMIT 50
+          }, u={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/AnyDesk Connections")
+            LIMIT 50
+          }, v={
+            SELECT *
+            FROM source(artifact="Custom.Windows.LateralMovement/SMB Client Connectivity EVTX")
+            LIMIT 50
+          })
+
+      - type: md
+        template: |
+          # Security
+      - type: vql
+        template: |
+          SELECT *
+          FROM source(artifact="Custom.Windows.LateralMovement/Security EVTX")
+          LIMIT 50
+
+  - name: User Access Logs
+    description: Parses the UAL logs by calling Windows.Forensics.UserAccessLogs and passing the SUMGlob parameter. Extracts all entries with the role name matching the regex '''^File|^Remote|^Web|^FTP'''.
+    query: |
+      LET hostname <= SELECT Hostname
+                      FROM info()
+
+      LET DateAfterTime <= if(condition=DateAfter,
+        then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+      LET DateBeforeTime <= if(condition=DateBefore,
+        then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+      SELECT LastAccess AS EventTime,
+             RoleName AS Description,
+             "User Access Logs Clients" AS ArtifactSource,
+             "-" AS SourceSystem,
+             Address AS SourceIpAddress,
+             hostname[0].Hostname AS DestinationSystem,
+             "-" AS DestinationIpAddress,
+             AuthenticatedUserName As UserAccount,
+             "Inbound" AS Direction,
+             dict(`InsertDate`=InsertDate,
+                  `TotalAccesses` = TotalAccesses,
+                  `Days` = Days,
+                  `Interactive` = "Both",
+                  `ConfidenceLevel` = "Strong") AS AddInfo
+      FROM Artifact.Windows.Forensics.UserAccessLogs(source="Clients", SUMGlob= SUMGlob)
+      WHERE RoleName =~ '''^File|^Remote|^Web|^FTP'''
+        AND NOT (RemoveSystemAccounts
+                 AND (UserAccount =~ '''^(NT AUTHORITY|Font Driver Host|Window Manager)\\(SYSTEM|LOCAL SERVICE|NETWORK SERVICE|UMFD-[0-9]|DWM-[0-9])$'''
+                      OR UserAccount =~ expand(path='%ComputerName%$')))
+        AND UserAccount =~ UserAccountRegex
+        AND EventTime < DateBeforeTime
+        AND EventTime > DateAfterTime
+
+  - name: Remote Desktop Protocol EVTX
+    description: Parses various RDP event logs with a focus on RdpCoreTS EID 131, LocalSessionManager EID 21, RemoteConnectionManager EID 1149, RDPClient EID 1024 & 1102.
+    query: |
+      LET EIDLookup <= dict(
+        `21` = 'RDP_SESSION_LOGON_SUCCESS',
+        `131` = 'TCP_CONNECTION_ACCEPTED',
+        `1024` = 'RDP_CONNECTION_ATTEMPT',
+        `1102` = 'RDP_CONNECTION_ESTABLISHED',
+        `1149` = 'RDP_AUTHENTICATION_SUCCESSFUL')
+
+      LET DateAfterTime <= if(condition=DateAfter,
+        then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+      LET DateBeforeTime <= if(condition=DateBefore,
+        then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+      SELECT *
+      FROM chain(a={
+                     SELECT timestamp(epoch=int(int=System.TimeCreated.SystemTime)) AS EventTime,
+                            get(item=EIDLookup, member= System.EventID.Value) AS Description,
+                            System.Channel AS ArtifactSource,
+                            "-" AS SourceSystem,
+                            regex_replace(source=split(string=EventData.ClientIP, sep=":")[0], replace="", re='''[\[\]]''') AS SourceIpAddress,
+                            System.Computer AS DestinationSystem,
+                            "-" AS DestinationIpAddress,
+                            "-" AS UserAccount,
+                            "Inbound" AS Direction,
+                            dict(`EventID` = System.EventID.Value,
+                                 `ConnType` = EventData.ConnType,
+                                 `Interactive` = "Yes",
+                                 `ConfidenceLevel` = "Medium") AS AddInfo
+                     FROM parse_evtx(filename=join(array=[expand(path=Evtx_Path), "Microsoft-Windows-RemoteDesktopServices-RdpCoreTS%4Operational.evtx"]))
+                     WHERE (`131_RDP_Connection_Established` AND System.EventID.Value = 131)
+                       AND UserAccount =~ UserAccountRegex
+                       AND EventTime < DateBeforeTime
+                       AND EventTime > DateAfterTime
+
+                   }, b={
+                     SELECT timestamp(epoch=int(int=System.TimeCreated.SystemTime)) AS EventTime,
+                            get(item=EIDLookup, member= System.EventID.Value) AS Description,
+                            System.Channel AS ArtifactSource,
+                            "-" AS SourceSystem,
+                            if(condition= UserData.EventXML.Address = "LOCAL",
+                               then= "::1",
+                               else= UserData.EventXML.Address) AS SourceIpAddress,
+                            System.Computer AS DestinationSystem,
+                            "-" AS DestinationIpAddress,
+                            UserData.EventXML.User AS UserAccount,
+                            "Inbound" AS Direction,
+                            dict(`EventID` = System.EventID.Value,
+                                 `Interactive` = "Yes",
+                                 `ConfidenceLevel` = "Strong") AS AddInfo
+                     FROM parse_evtx(filename=join(array=[expand(path=Evtx_Path), "Microsoft-Windows-TerminalServices-LocalSessionManager%4Operational.evtx"]))
+                     WHERE System.EventID.Value = 21
+                       AND UserAccount =~ UserAccountRegex
+                       AND EventTime < DateBeforeTime
+                       AND EventTime > DateAfterTime
+                   }, c={
+                     SELECT timestamp(epoch=int(int=System.TimeCreated.SystemTime)) AS EventTime,
+                            get(item=EIDLookup, member= System.EventID.Value) AS Description,
+                            System.Channel AS ArtifactSource,
+                            "-" AS SourceSystem,
+                            UserData.EventXML.Param3 AS SourceIpAddress,
+                            System.Computer AS DestinationSystem,
+                            "-" AS DestinationIpAddress,
+                            UserData.EventXML.Param1 AS UserAccount,
+                            "Inbound" AS Direction,
+                            dict(`EventID` = System.EventID.Value,
+                                 `Interactive` = "Yes",
+                                 `ConfidenceLevel` = "Strong") AS AddInfo
+                     FROM parse_evtx(filename=join(array=[expand(path=Evtx_Path), "Microsoft-Windows-TerminalServices-RemoteConnectionManager%4Operational.evtx"]))
+                     WHERE System.EventID.Value = 1149
+                       AND UserAccount =~ UserAccountRegex
+                       AND EventTime < DateBeforeTime
+                       AND EventTime > DateAfterTime
+                   }, d={
+                     SELECT timestamp(epoch=int(int=System.TimeCreated.SystemTime)) AS EventTime,
+                            get(item=EIDLookup, member= System.EventID.Value) AS Description,
+                            System.Channel AS ArtifactSource,
+                            System.Computer AS SourceSystem,
+                            "-" AS SourceIpAddress,
+                            if(condition= NOT EventData.Value =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+                               then= EventData.Value,
+                               else= "-") AS DestinationSystem,
+                            if(condition= EventData.Value =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+                               then= EventData.Value,
+                               else= "-") AS DestinationIpAddress,
+                            System.Security.UserID AS UserAccount,
+                            "Outbound" AS Direction,
+                            dict(`EventID` = System.EventID.Value,
+                                 `Interactive` = "Yes",
+                                 `ConfidenceLevel` = if(condition= System.EventID.Value = 1102,
+                                                        then= "Strong",
+                                                        else= "Medium")) AS AddInfo
+                     FROM parse_evtx(filename=join(array=[expand(path=Evtx_Path), "Microsoft-Windows-TerminalServices-RDPClient%4Operational.evtx"]))
+                     WHERE System.EventID.Value in (1024, 1102)
+                       AND UserAccount =~ UserAccountRegex
+                       AND EventTime < DateBeforeTime
+                       AND EventTime > DateAfterTime
+                    })
+
+  - name: ShellBags
+    description: |
+      Parses shellbags by calling Windows.Forensics.Shellbags and filters for "NetworkLocation" bag entries. ***This is the most time intensive source of this artifact in testing.***
+
+    query: |
+
+      LET hostname <= SELECT Hostname
+                      FROM info()
+
+      LET DateAfterTime <= if(condition=DateAfter,
+        then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+      LET DateBeforeTime <= if(condition=DateBefore,
+        then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+      SELECT *
+      FROM if(condition= EnableShellBags,
+              then= {SELECT ModTime AS EventTime,
+                            Description AS _Description,
+                            "NETWORK_FOLDER_ACCESS" AS Description,
+                            "ShellBags" AS ArtifactSource,
+                            hostname[0].Hostname AS SourceSystem,
+                            "-" AS SourceIpAddress,
+                            if(condition= NOT Description.ShortName =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+                                then= split(string= Description.ShortName,sep= "\\\\")[2],
+                                else= "-") AS DestinationSystem,
+                            if(condition= Description.ShortName =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+                                then= split(string= Description.ShortName,sep= "\\\\")[2],
+                                else= "-") AS DestinationIp,
+                            split(string=_OSPath, sep='''\\\\''')[2] AS UserAccount,
+                            "Outbound" AS Direction,
+                            dict(`ShortName` = Description.ShortName,
+                                 `Interactive`= "No",
+                                 `ConfidenceLevel` = "Strong") AS AddInfo
+                     FROM Artifact.Windows.Forensics.Shellbags(SearchSpecs= SearchSpecs)
+                     WHERE _Description.Type = "NetworkLocation"
+                       AND _Description.ShortName
+                       AND NOT DestinationSystem = hostname[0].Hostname
+                       AND UserAccount =~ UserAccountRegex
+                       AND EventTime > DateAfterTime
+                       AND EventTime < DateBeforeTime
+                    },
+              else= {SELECT * FROM scope()})
+
+  - name: WinRMOperational EVTX
+    description: Parses event IDs 6 & 91 from the Microsoft-Windows-WinRM%4Operational.evtx log to extract evidence of Remote Access using Powershell.
+    query: |
+
+      LET EIDLookup <= dict(
+        `6` = 'REMOTE_ACCESS_USING_POWERSHELL',
+        `91` = 'REMOTE_SESSION_CREATED_USING_POWERSHELL')
+
+      LET DateAfterTime <= if(condition=DateAfter,
+        then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+      LET DateBeforeTime <= if(condition=DateBefore,
+        then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+      SELECT timestamp(epoch=int(int=System.TimeCreated.SystemTime)) AS EventTime,
+             get(item=EIDLookup, member= System.EventID.Value) AS Description,
+             System.Channel AS ArtifactSource,
+             System.Computer AS SourceSystem,
+             "-" AS SourceIpAddress,
+             if(condition= System.EventID.Value = 6,
+                then= split(string=EventData.Data.Value, sep="/")[0],
+                else= "-") AS DestinationSystem,
+             "-" AS DestinationIpAddress,
+             System.Security.UserID AS UserAccount,
+             if(condition= System.EventID.Value = 6,
+                then= "Outbound",
+                else= "Inbound") AS Direction,
+             dict(`EventID` = System.EventID.Value,
+                  `Interactive` = "Both",
+                  `ConfidenceLevel` = if(condition= System.EventID.Value = 6,
+                                         then= "Medium",
+                                         else= "Strong")) AS AddInfo
+      FROM parse_evtx(filename=join(array=[expand(path=Evtx_Path), "Microsoft-Windows-WinRM%4Operational.evtx"]))
+      WHERE System.EventID.Value = 6
+         OR (`91_Remote_Connection_Received_WinRM` AND System.EventID.Value = 91)
+        AND NOT (RemoveSystemAccounts
+                 AND (UserAccount =~ '''^(NT AUTHORITY|Font Driver Host|Window Manager)\\(SYSTEM|LOCAL SERVICE|NETWORK SERVICE|UMFD-[0-9]|DWM-[0-9])$'''
+                      OR UserAccount =~ expand(path='%ComputerName%$')))
+        AND UserAccount =~ UserAccountRegex
+        AND EventTime > DateAfterTime
+        AND EventTime < DateBeforeTime
+
+  - name: WinSCP
+    description: Parses the NTUser.dat registry hives to extract data associated with sessions, host keys, fingerprints, and cache for outgoing connections via WinSCP.
+    query: |
+      LET extractDestination(OSPath) = if(condition= OSPath =~ '''Sessions''',
+                                    then= Data.value,
+
+                                    else= if(condition= OSPath =~ '''SshHostKeys''',
+                                    then= regex_replace(source=split(string=split(string=OSPath, sep="@")[1], sep=":")[1],re='''"|}''', replace=""),
+
+                                    else= if(condition= OSPath =~ '''LastFingerprints''',
+                                    then= split(string=split(string=OSPath, sep="\\\\")[-1], sep=":")[0],
+
+                                    else= if(condition= OSPath =~ '''CDCache''',
+                                    then= regex_replace(source=split(string=OSPath, sep="@")[1], re='''"|}''', replace="")))))
+
+      LET DescriptionMapping(OSPath) = if(condition= OSPath =~ '''SshHostKeys''',
+                                          then= "SSH_HOSTKEY",
+
+                                          else= if(condition= OSPath =~ '''LastFingerprints''',
+                                          then= "LAST_FINGERPRINTS",
+
+                                          else= if(condition= OSPath =~ '''CDCache''',
+                                          then= "CDCACHE",
+
+                                          else= if(condition= OSPath =~ '''Sessions''',
+                                          then= "SESSIONS"))))
+
+      LET hostname <= SELECT Hostname
+                             FROM info()
+
+      LET DateAfterTime <= if(condition=DateAfter,
+        then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+      LET DateBeforeTime <= if(condition=DateBefore,
+        then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+      SELECT Mtime AS EventTime,
+             join(array=["WINSCP_",DescriptionMapping(OSPath= OSPath),"_MODIFIED"]) AS Description,
+             join(array=["WINSCP_",DescriptionMapping(OSPath= OSPath)]) AS ArtifactSource,
+             hostname[0].Hostname AS SourceSystem,
+             "-" AS SourceIpAddress,
+             if(condition= NOT extractDestination(OSPath= OSPath) =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+                then= extractDestination(OSPath= OSPath),
+                else="-") AS DestinationSystem,
+             if(condition= extractDestination(OSPath= OSPath) =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+                then= extractDestination(OSPath= OSPath),
+                else="-") AS DestinationIpAddress,
+             Username AS UserAccount,
+             "Outbound" AS Direction,
+             dict(`Interactive` = "Yes",
+                  `ConfidenceLevel` = if(condition= OSPath =~ "SshHostKeys",
+                                         then= "Medium",
+                                         else= "Strong")) AS AddInfo
+      FROM Artifact.Windows.Registry.NTUser(KeyGlob= "Software\\Martin Prikryl\\WinSCP 2\\{Sessions\\**\\HostName,SshHostKeys\\*,Configuration\\CDCache\\*,Configuration\\LastFingerprints\\*}")
+      WHERE UserAccount =~ UserAccountRegex
+        AND EventTime > DateAfterTime
+        AND EventTime < DateBeforeTime
+
+  - name: OpenSSH
+    description: Parses the OpenSSH event log for connection history.
+    query: |
+
+      LET parseDescription(EventData) = if(condition= EventData.payload =~ "invalid user",
+                                           then= "OPENSSH_INVALID_USER_LOGON",
+
+                                           else= if(condition= EventData.payload =~ "Failed",
+                                           then= "OPENSSH_FAILED_LOGON",
+
+                                           else= if(condition= EventData.payload =~ "Accepted",
+                                           then= "OPENSSH_LOGON")))
+
+      LET DateAfterTime <= if(condition=DateAfter,
+        then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+      LET DateBeforeTime <= if(condition=DateBefore,
+        then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+      SELECT timestamp(epoch=int(int=System.TimeCreated.SystemTime)) AS EventTime,
+             parseDescription(EventData= EventData) AS Description,
+             System.Channel AS ArtifactSource,
+             "-" AS SourceSystem,
+             parse_string_with_regex(regex='''(?P<IP>(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3})''', string=EventData.payload).IP AS SourceIpAddress,
+             System.Computer AS DestinationSystem,
+             "-" AS DestinationIpAddress,
+             parse_string_with_regex(regex='''for (invalid user )?(?P<User>\w+) from''', string= EventData.payload).User AS UserAccount,
+             "Inbound" AS Direction,
+             dict(`Method`= split(string=EventData.payload, sep=" ")[1],
+                  `Interactive` = "Yes",
+                  `ConfidenceLevel` = "Strong") AS AddInfo
+      FROM parse_evtx(filename=join(array=[expand(path=Evtx_Path), "OpenSSH%4Operational.evtx"]))
+      WHERE EventData.payload =~ '''invalid user|Failed|Accepted'''
+        AND UserAccount =~ UserAccountRegex
+        AND EventTime > DateAfterTime
+        AND EventTime < DateBeforeTime
+
+  - name: LNK
+    description: Parses the Windows LNK/Shortcut files to extract evidence of network share access.
+    query: |
+
+      LET hostname <= SELECT Hostname
+                             FROM info()
+
+      LET DateAfterTime <= if(condition=DateAfter,
+        then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+      LET DateBeforeTime <= if(condition=DateBefore,
+        then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+      SELECT SourceModified AS EventTime,
+             "LNK_SHARE_ACCESS" AS Description,
+             FullPath AS ArtifactSource,
+             hostname[0].Hostname AS SourceSystem,
+             "-" AS SourceIpAddress,
+             if(condition= NOT Target.path =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+                then= split(string=Target.path, sep="\\\\")[2],
+                else= "-") AS DestinationSystem,
+             if(condition= Target.path =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+                then= split(string=Target.path, sep="\\\\")[2],
+                else= "-") AS DestinationIpAddress,
+             split(string= FullPath, sep="\\\\")[2] AS UserAccount,
+             "Outbound" AS Direction,
+             dict(`SourceCreated`= SourceCreated,
+                  `HeaderCreationTime`= HeaderCreationTime,
+                  `TargetPath` = Target,
+                  `Interactive` = "Yes",
+                  `ConfidenceLevel` = "Strong") AS AddInfo
+      FROM Artifact.Windows.Forensics.Lnk()
+      WHERE Target.path =~ '''\\\\.+\\'''
+        AND UserAccount =~ UserAccountRegex
+        AND EventTime > DateAfterTime
+        AND EventTime < DateBeforeTime
+
+  - name: TeamViewer
+    description: Leverages TeamViewer artifact to extract incoming connections from C:\Program Files and (x86)\TeamViewer\Connections_incoming.txt file.
+    query: |
+
+      LET hostname <= SELECT Hostname
+                             FROM info()
+
+      SELECT StartTime AS EventTime,
+             "INCOMING_TEAMVIEWER" AS Description,
+             "TEAMVIEWER_CONNECTIONS_INCOMMING" AS ArtifactSource,
+             if(condition= NOT SourceHost =~  '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+                then= SourceHost,
+                else= "-") AS SourceSystem,
+             if(condition= SourceHost =~  '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+                then= SourceHost,
+                else= "-") AS SourceIpAddress,
+             hostname[0].Hostname AS DestinationSystem,
+             "-" AS DestinationIpAddress,
+             User AS UserAccount,
+             "Inbound" AS Direction,
+             dict(`EndTime` = EndTime,
+                  `ConnectionType` = ConnectionType,
+                  `ConnectionID` = ConnectionID,
+                  `Interactive` = "Yes",
+                  `ConfidenceLevel` = "Strong") AS AddInfo
+      FROM Artifact.Windows.Applications.TeamViewer.Incoming(FileGlob="C:\\Program Files {(x86)\\TeamViewer\\Connections_incoming.txt,\\TeamViewer\\Connections_incoming.txt}",
+                                                             DateAfter=DateAfter,
+                                                             DateBefore=DateBefore,
+                                                             UserRegex=UserAccountRegex)
+
+  - name: Putty SSH HostKeys
+    description: Returns PuTTY SSH HostKeys from NTUser.dat registry hives.
+    query: |
+
+        LET extractDestination(OSPath) = if(condition= OSPath =~ '''SshHostKeys''',
+                                then= regex_replace(source=split(string=split(string=OSPath, sep="@")[1], sep=":")[1]
+                                ,re='''"|}''', replace=""))
+
+        LET DateAfterTime <= if(condition=DateAfter,
+          then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+        LET DateBeforeTime <= if(condition=DateBefore,
+          then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+        SELECT Mtime AS EventTime,
+            "Remote Access Using PuTTY" AS Description,
+            "NTUser.dat PuTTY SSHHostKey" AS ArtifactSource,
+             hostname[0].Hostname AS SourceSystem,
+             "-" AS SourceIpAddress,
+             if(condition= NOT extractDestination(OSPath= OSPath) =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+                    then= extractDestination(OSPath= OSPath),
+             else="-") AS DestinationSystem,
+             if(condition= extractDestination(OSPath= OSPath) =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+                then= extractDestination(OSPath= OSPath),
+             else="-") AS DestinationIpAddress,
+             split(string=OSPath.DelegatePath, sep="\\\\")[2] AS UserAccount,
+             "Outbound" AS Direction,
+             dict(`ArtifactSourcePath` = OSPath.DelegatePath,
+                  `KeyValue`= Data.value,
+                  `Interactive` = "Yes",
+                  `ConfidenceLevel` = "Medium") AS AddInfo
+        FROM Artifact.Windows.Registry.NTUser(KeyGlob= "SOFTWARE\\SimonTatham\\PuTTY\\SshHostKeys\\*")
+        WHERE UserAccount =~ UserAccountRegex
+         AND EventTime > DateAfterTime
+         AND EventTime < DateBeforeTime
+
+  - name: ScreenConnect
+    description: Extracts connection events for ScreenConnect from the Application event log
+    query: |
+      LET DateAfterTime <= if(condition=DateAfter,
+        then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+      LET DateBeforeTime <= if(condition=DateBefore,
+        then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+      SELECT timestamp(epoch=int(int=System.TimeCreated.SystemTime)) AS EventTime,
+             "SCREENCONNECT_INCOMING" AS Description,
+             join(array=[System.Channel, System.Provider.Name], sep=" ") AS ArtifactSouce,
+             "-" AS SourceSystem,
+             "-" AS SourceIpAddress,
+             System.Computer AS DestinationSystem,
+             "-" AS DestinationIpAddress,
+             "-" AS UserAccount,
+             "Outbound" AS Direction,
+             dict(`ExecutablePath`= parse_string_with_regex(regex='''Executable Path: (?P<Path>.+)''', string= EventData.Data).Path,
+                  `Interactive` = "Yes",
+                  `ConfidenceLevel` = "Strong") AS AddInfo
+      FROM parse_evtx(filename=join(array=[expand(path=Evtx_Path), "Application.evtx"]))
+      WHERE System.Provider.Name =~ "ScreenConnect"
+        AND EventData.Data =~ "Connected"
+        AND EventTime > DateAfterTime
+        AND EventTime < DateBeforeTime
+
+  - name: Registry Mount Points
+    description: Returns Mapped Remote Shares on the source system from NTUser.dat registry hives.
+    query: |
+
+        LET hostname <= SELECT Hostname FROM info()
+
+        LET extractDestination(OSPath) = if(condition= OSPath.Basename =~ '''##''',
+                                       then= regex_replace(source=split(string=split(string=OSPath.Basename, sep="##")[1], sep="#")[0], re="#", replace="\\"))
+
+        LET DateAfterTime <= if(condition=DateAfter,
+          then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+        LET DateBeforeTime <= if(condition=DateBefore,
+          then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+        SELECT Mtime AS EventTime,
+              "Mapped Remote Shares" AS Description,
+              "NTUser.dat MountPoints2" AS ArtifactSource,
+              hostname[0].Hostname AS SourceSystem,
+              "-" AS SourceIpAddress,
+              if(condition= NOT extractDestination(OSPath= OSPath) =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+              then= extractDestination(OSPath= OSPath),
+              else="-") AS DestinationSystem,
+              if(condition= extractDestination(OSPath= OSPath) =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+              then= extractDestination(OSPath= OSPath),
+              else="-") AS DestinationIpAddress,
+              split(string=OSPath.DelegatePath, sep="\\\\")[2] AS UserAccount,
+              "Outbound" AS Direction,
+              dict(`ArtifactSourcePath` = OSPath.DelegatePath,
+                   `FullPathofMappedShare` = regex_replace(source=OSPath.Basename, re="#", replace="\\"),
+                   `Interactive` = "Both",
+                   `ConfidenceLevel` = "Strong") AS AddInfo
+        FROM Artifact.Windows.Registry.NTUser(KeyGlob= "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\MountPoints2\\*")
+        WHERE OSPath =~ "##"
+         AND UserAccount =~ UserAccountRegex
+         AND EventTime > DateAfterTime
+         AND EventTime < DateBeforeTime
+
+  - name: Map Network Drive MRU
+    description: Returns Mapped Remote Shares accessed via Windows explorer from NTUser.dat registry hives.
+    query: |
+
+        LET hostname <= SELECT Hostname FROM info()
+
+        LET DateAfterTime <= if(condition=DateAfter,
+          then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+        LET DateBeforeTime <= if(condition=DateBefore,
+          then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+        SELECT Mtime AS EventTime,
+               "MRU for Mapped Remote Shares" AS Description,
+               "NTUser.dat Map Network Drive" AS ArtifactSource,
+               hostname[0].Hostname AS SourceSystem,
+               "-" AS SourceIpAddress,
+                if(condition= NOT Data.value =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+               then= split(string= Data.value,sep= "\\\\")[2],
+               else="-") AS DestinationSystem,
+               if(condition= Data.value =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+               then= split(string= Data.value,sep="\\\\")[2],
+               else="-") AS DestinationIpAddress,
+               split(string=OSPath.DelegatePath, sep="\\\\")[2] AS UserAccount,
+               "Outbound" AS Direction,
+               dict(`ArtifactSourcePath` = OSPath.DelegatePath,
+                    `FullPathofMappedShare` = Data.value,
+                    `Interactive` = "Yes",
+                    `ConfidenceLevel` = "Strong") AS AddInfo
+        FROM Artifact.Windows.Registry.NTUser(KeyGlob= "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Map Network Drive MRU\\*")
+        WHERE Data.value =~ "^\\\\"
+          AND UserAccount =~ UserAccountRegex
+          AND EventTime > DateAfterTime
+          AND EventTime < DateBeforeTime
+
+  - name: Terminal Server Registry
+    description: Extracts evidence of Remote Access via RDP from NTUser.dat registry hives.
+    query: |
+      LET getDescription(OSPath)= if(condition= OSPath.Path =~ "Servers",
+                                     then= "TERMINAL_SERVER_SERVER_KEY_MODIFIED",
+                                     else= "TERMINAL_SERVER_DEFAULT_KEY_MODIFIED")
+
+      LET hostname <= SELECT Hostname
+                             FROM info()
+
+      LET extractAddress(OSPath, Data) = if(condition= OSPath.Path =~ "Servers",
+                                            then= split(string= path_split(path= OSPath.Path)[4], sep=":")[0],
+                                            else= Data.value)
+
+      LET DateAfterTime <= if(condition=DateAfter,
+        then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+      LET DateBeforeTime <= if(condition=DateBefore,
+        then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+      SELECT Mtime AS EventTime,
+             getDescription(OSPath= OSPath) AS Description,
+             "Terminal Server Registry" AS ArtifactSource,
+             hostname[0].Hostname AS SourceSystem,
+             "-" AS SourceIpAddress,
+             if(condition= NOT extractAddress(OSPath= OSPath, Data= Data) =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+                then= extractAddress(OSPath= OSPath, Data= Data),
+                else= "-") AS DestinationSystem,
+             if(condition= extractAddress(OSPath= OSPath, Data= Data) =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+                then= extractAddress(OSPath= OSPath, Data= Data),
+                else= "-") AS DestinationIpAddress,
+             Username AS UserAccount,
+             "Outbound" AS Direction,
+             if(condition= OSPath.Path =~ "UsernameHint", then= dict(`UsernameHint` = Data.value, `Interactive` = "Yes", `ConfidenceLevel` = "Medium"), else= dict(`Interactive` = "Yes", `ConfidenceLevel` = "Medium")) AS AddInfo
+      FROM Artifact.Windows.Registry.NTUser(KeyGlob="/SOFTWARE/Microsoft/Terminal Server Client/{Servers/**,Default/*}")
+      WHERE Data.type != "Key"
+        AND UserAccount =~ UserAccountRegex
+        AND EventTime > DateAfterTime
+        AND EventTime < DateBeforeTime
+
+  - name: RunMRU
+    description: Extracts network locations from RunMRU Timeline
+    query: |
+      LET HostName <= SELECT Hostname FROM info()
+      LET extractDestination(reg_value) = if(condition= reg_value =~ '''\\\\.+\\''',
+                                    then= split(string=reg_value, sep="\\\\")[2],
+                                    else= if(condition= reg_value =~ '''mstsc''',
+                                    then= split(string=reg_value,sep=":")[1]))
+
+      LET DateAfterTime <= if(condition=DateAfter,
+        then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+      LET DateBeforeTime <= if(condition=DateBefore,
+        then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+      SELECT event_time AS EventTime,
+             "RunMRU" AS Description,
+             reg_key AS ArtifactSource,
+             HostName[0].Hostname AS SourceSystem,
+             "-" AS SourceIpSystem,
+             if(condition= NOT extractDestination(reg_value= reg_value) =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+                then= extractDestination(reg_value= reg_value),
+                else= "-") AS DestinationSystem,
+             if(condition= extractDestination(reg_value= reg_value) =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+                then= extractDestination(reg_value= reg_value),
+                else= "-") AS DestinationIpAddress,
+             user AS UserAccount,
+             "Outbound" AS Direction,
+             dict(`Path` = reg_value,
+                  `Interactive` = "Yes",
+                  `ConfidenceLevel` = "Medium") AS AddInfo
+      FROM Artifact.Windows.Timeline.Registry.RunMRU()
+      WHERE reg_value =~ '''(\\\\.+\\|mstsc)'''
+        AND UserAccount =~ UserAccountRegex
+        AND EventTime > DateAfterTime
+        AND EventTime < DateBeforeTime
+
+  - name: Typed Paths
+    description: Returns Network Shares accessed via Windows explorer typed paths from NTUser.dat registry hives.
+    query: |
+
+        LET hostname <= SELECT Hostname FROM info()
+
+        LET DateAfterTime <= if(condition=DateAfter,
+          then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+        LET DateBeforeTime <= if(condition=DateBefore,
+          then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+        SELECT Mtime AS EventTime,
+               "Remote Share Accessed via Explorer" AS Description,
+               "NTUser.dat Typed Paths" AS ArtifactSource,
+               hostname[0].Hostname AS SourceSystem,
+               "-" AS SourceIpAddress,
+               if(condition= NOT Data.value =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+               then= split(string= Data.value, sep="\\\\")[2],
+               else="-") AS DestinationSystem,
+               if(condition= Data.value =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+               then= split(string= Data.value, sep="\\\\")[2],
+               else="-") AS DestinationIpAddress,
+               split(string=OSPath.DelegatePath, sep="\\\\")[2] AS UserAccount,
+               "Outbound" AS Direction,
+               dict(`ArtifactSourcePath` = OSPath.DelegatePath,
+                    `FullPathofMappedShare` = Data.value,
+                    `Interactive` = "Yes",
+                    `ConfidenceLevel` = "Medium") AS AddInfo
+        FROM Artifact.Windows.Registry.NTUser(KeyGlob= "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\TypedPaths\\*")
+        WHERE Data.value =~ "^\\\\"
+          AND UserAccount =~ UserAccountRegex
+          AND EventTime > DateAfterTime
+          AND EventTime < DateBeforeTime
+
+  - name: Mapped Network Shares
+    description: Returns mapped Network Shares from NTUser.dat registry hives.
+    query: |
+
+        LET hostname <= SELECT Hostname FROM info()
+
+        LET DateAfterTime <= if(condition=DateAfter,
+          then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+        LET DateBeforeTime <= if(condition=DateBefore,
+          then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+        SELECT Mtime AS EventTime,
+               "Mapped Remote Share" AS Description,
+               "NTUser.dat Networks" AS ArtifactSource,
+               hostname[0].Hostname AS SourceSystem,
+               "-" AS SourceIpAddress,
+               if(condition= NOT Data.value =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+               then= split(string= Data.value, sep="\\\\")[2],
+               else="-") AS DestinationSystem,
+               if(condition= Data.value =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+               then= split(string= Data.value, sep="\\\\")[2],
+               else="-") AS DestinationIpAddress,
+               split(string=OSPath.DelegatePath, sep="\\\\")[2] AS UserAccount,
+               "Outbound" AS Direction,
+               dict(`Artifact Source Path` = OSPath.DelegatePath,
+                    `Full Path of Accessed Share` = Data.value,
+                    `Interactive` = "Yes",
+                    `ConfidenceLevel` = "Strong") AS AddInfo
+        FROM Artifact.Windows.Registry.NTUser(KeyGlob= "NETWORK\\**\\RemotePath")
+        WHERE UserAccount =~ UserAccountRegex
+          AND EventTime > DateAfterTime
+          AND EventTime < DateBeforeTime
+
+  - name: SMB Server Audit EVTX
+    description: Parses Microsoft-Windows-SMBServer%4Audit event log to extract evidence of Remote Access from the destination system.
+    query: |
+        LET DateAfterTime <= if(condition=DateAfter,
+          then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+        LET DateBeforeTime <= if(condition=DateBefore,
+          then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+        SELECT timestamp(epoch=int(int=System.TimeCreated.SystemTime)) AS EventTime,
+             "Incoming access from a remote system" AS Description,
+             System.Channel AS ArtifactSource,
+             System.Computer AS SourceSystem,
+             "-" AS SourceIpAddress,
+             if(condition= NOT EventData.Data.Value =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+             then= EventData.Data.Value,
+             else="-") AS DestinationSystem,
+             if(condition= EventData.Data.Value =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+             then= EventData.Data.Value,
+             else="-") AS DestinationIpAddress,
+             "-" AS UserAccount,
+             "Inbound" AS Direction,
+             dict(`EventID` = System.EventID.Value,
+                  `Interactive` = "Both",
+                  `ConfidenceLevel` = "Strong") AS AddInfo
+        FROM parse_evtx(filename=join(array=[expand(path=Evtx_Path), "Microsoft-Windows-SMBServer%4Audit.evtx"]))
+        WHERE (`3000_Access_via_SMB` AND System.EventID.Value = 3000)
+          AND UserAccount =~ UserAccountRegex
+          AND EventTime > DateAfterTime
+          AND EventTime < DateBeforeTime
+
+  - name: PsExec
+    description: Use of PsExeSvc in System event log
+    query: |
+      LET DateAfterTime <= if(condition=DateAfter,
+        then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+      LET DateBeforeTime <= if(condition=DateBefore,
+        then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+      SELECT timestamp(epoch=int(int=System.TimeCreated.SystemTime)) AS EventTime,
+             "PSEXESVC_EXECUTION" AS Description,
+             System.Channel AS ArtifactSource,
+             "-" AS SourceSystem,
+             "-" AS SourceIpAddress,
+             System.Computer AS DestinationSystem,
+             "-" AS DestinationIpAddress,
+             System.Security.UserID AS UserAccount,
+             "Inbound" AS Direction,
+             dict(`ServiceName` = EventData.ServiceName,
+                  `Interactive` = "No",
+                  `ConfidenceLevel` = "Strong") AS AddInfo
+      FROM parse_evtx(filename=join(array=[expand(path=Evtx_Path), "System.evtx"]))
+      WHERE System.EventID.Value = 7045
+        AND EventData.ServiceName =~ "psexesvc"
+        AND UserAccount =~ UserAccountRegex
+        AND EventTime > DateAfterTime
+        AND EventTime < DateBeforeTime
+
+  - name: Atera Network Connections
+    description: Return evidence of Remote Access using Atera from the Software registry hive.
+    query: |
+
+        LET hostname <= SELECT Hostname FROM info()
+
+        LET DateAfterTime <= if(condition=DateAfter,
+          then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+        LET DateBeforeTime <= if(condition=DateBefore,
+          then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+        SELECT Key.ModTime AS EventTime,
+               "Remote access using Atera" AS Description,
+               "HLMK Software hive Atera keys" AS ArtifactSource,
+                ServerName AS SourceSystem,
+               "-" AS SourceIpAddress,
+               hostname[0].Hostname AS DestinationSystem,
+               "-" AS DestinationIpAddress,
+               "-" AS UserAccount,
+               "Inbound" AS Direction,
+               dict(`EmailID` = IntegratorLogin,
+                    `AccountId` = AccountId,
+                    `CompanyId` = CompanyId,
+                    `AgentId` = AgentId,
+                    `Artifact Source Path` = Key.FullPath,
+                    `Interactive` = "Yes",
+                    `ConfidenceLevel` = "Strong") AS AddInfo
+        FROM read_reg_key(globs="HKEY_LOCAL_MACHINE\\SOFTWARE\\ATERA Networks\\AlphaAgent\\")
+        WHERE UserAccount =~ UserAccountRegex
+          AND EventTime > DateAfterTime
+          AND EventTime < DateBeforeTime
+
+  - name: AnyDesk Connections
+    description: Evidence of Remote Access using AnyDesk exchange artifact by Jos Clephas - @DfirJos
+    query: |
+
+        LET hostname <= SELECT Hostname FROM info()
+
+        LET DateAfterTime <= if(condition=DateAfter,
+          then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+        LET DateBeforeTime <= if(condition=DateBefore,
+          then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+        SELECT Timestamp AS EventTime,
+               "Incoming access via AnyDesk" AS Description,
+               "Anydesk Logs" AS ArtifactSource,
+               "-" AS SourceSystem,
+               if(condition= LoggedInFromIP =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+               then= LoggedInFromIP,
+               else="-") AS SourceIpAddress,
+               hostname[0].Hostname AS DestinationSystem,
+               if(condition= ExternalAddress =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+                  then= ExternalAddress,
+                  else="-") AS DestinationIpAddress,
+               "-" AS UserAccount,
+               "Inbound" AS Direction,
+               dict(`Artifact Source Path` = FullPath,
+                    `Computer Name` = ComputerName,
+                    `Potential File Transfer` = PotentialFileTransfer,
+                    `Logs source system` = hostname[0].Hostname,
+                    `Interactive` = "Yes",
+                    `ConfidenceLevel` = "Strong") AS AddInfo
+        FROM Artifact.Exchange.Windows.Applications.AnyDesk()
+        WHERE UserAccount =~ UserAccountRegex
+          AND EventTime > DateAfterTime
+          AND EventTime < DateBeforeTime
+
+  - name: SMB Client Connectivity EVTX
+    description: Parses Microsoft-Windows-SmbClient%4Connectivity event log to extract evidence of Remote Access.
+    query: |
+        LET extractDestination(EventData) = split(string=EventData.ServerName, sep="\\\\")[1]
+        LET DateAfterTime <= if(condition=DateAfter,
+          then=timestamp(epoch=DateAfter), else=timestamp(epoch="1600-01-01"))
+        LET DateBeforeTime <= if(condition=DateBefore,
+          then=timestamp(epoch=DateBefore), else=timestamp(epoch="2200-01-01"))
+
+        SELECT timestamp(epoch=int(int=System.TimeCreated.SystemTime)) AS EventTime,
+             "Reconnection to remote system via SMB" AS Description,
+             System.Channel AS ArtifactSource,
+             System.Computer AS SourceSystem,
+             "-" AS SourceIpAddress,
+             if(condition= NOT extractDestination(EventData= EventData) =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+             then= extractDestination(EventData= EventData),
+             else="-") AS DestinationSystem,
+             if(condition= extractDestination(EventData= EventData) =~ '''(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}''',
+             then= extractDestination(EventData= EventData),
+             else="-") AS DestinationIpAddress,
+             "-" AS UserAccount,
+             "Outbound" AS Direction,
+             dict(`EventID` = System.EventID.Value,
+                  `SessionID` = EventData.SessionId,
+                  `Interactive` = "Both",
+                  `ConfidenceLevel` = "Medium") AS AddInfo
+        FROM parse_evtx(filename=join(array=[expand(path=Evtx_Path), "Microsoft-Windows-SmbClient%4Connectivity.evtx"]))
+        WHERE (`30806_Session_Re-Established_to_Dest` AND System.EventID.Value = 30806)
+          AND UserAccount =~ UserAccountRegex
+          AND EventTime > DateAfterTime
+          AND EventTime < DateBeforeTime
