@@ -25,6 +25,7 @@ description: |
         - `131` = RDP_Connection_Established
     - LocalSessionManager
         - `21` = Successful_RDP_Logon
+        - `25` = RDP_Session_Reconnect
     - RemoteConnectionManager
         - `1149` = RDP_User_Authentication_Succeeded
     - RDPClient
@@ -466,6 +467,7 @@ sources:
     query: |
       LET EIDLookup <= dict(
         `21` = 'RDP_SESSION_LOGON_SUCCESS',
+        `25` = 'RDP_SESSION_RECONNECT',
         `131` = 'TCP_CONNECTION_ACCEPTED',
         `1024` = 'RDP_CONNECTION_ATTEMPT',
         `1102` = 'RDP_CONNECTION_ESTABLISHED',
@@ -517,7 +519,29 @@ sources:
                        AND UserAccount =~ UserAccountRegex
                        AND EventTime < DateBeforeTime
                        AND EventTime > DateAfterTime
-                   }, c={
+                       
+                   },  c={
+                     SELECT timestamp(epoch=int(int=System.TimeCreated.SystemTime)) AS EventTime,
+                            get(item=EIDLookup, member= System.EventID.Value) AS Description,
+                            System.Channel AS ArtifactSource,
+                            "-" AS SourceSystem,
+                            if(condition= UserData.EventXML.Address = "LOCAL",
+                               then= "::1",
+                               else= UserData.EventXML.Address) AS SourceIpAddress,
+                            System.Computer AS DestinationSystem,
+                            "-" AS DestinationIpAddress,
+                            UserData.EventXML.User AS UserAccount,
+                            "Inbound" AS Direction,
+                            dict(`EventID` = System.EventID.Value,
+                                 `Interactive` = "Yes",
+                                 `ConfidenceLevel` = "Strong") AS AddInfo
+                     FROM parse_evtx(filename=join(array=[expand(path=Evtx_Path), "Microsoft-Windows-TerminalServices-LocalSessionManager%4Operational.evtx"]))
+                     WHERE System.EventID.Value = 25
+                       AND UserAccount =~ UserAccountRegex
+                       AND EventTime < DateBeforeTime
+                       AND EventTime > DateAfterTime
+                   
+                     }, d={
                      SELECT timestamp(epoch=int(int=System.TimeCreated.SystemTime)) AS EventTime,
                             get(item=EIDLookup, member= System.EventID.Value) AS Description,
                             System.Channel AS ArtifactSource,
@@ -535,7 +559,8 @@ sources:
                        AND UserAccount =~ UserAccountRegex
                        AND EventTime < DateBeforeTime
                        AND EventTime > DateAfterTime
-                   }, d={
+                       
+                   }, e={
                      SELECT timestamp(epoch=int(int=System.TimeCreated.SystemTime)) AS EventTime,
                             get(item=EIDLookup, member= System.EventID.Value) AS Description,
                             System.Channel AS ArtifactSource,
